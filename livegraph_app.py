@@ -46,6 +46,7 @@ def ingest(dataset_of_choice: str):
     return bc, Gglob, dataset_of_choice
 
 if __name__ == "__main__":
+    # TODO: ad a hidable zone explaining thate timers for algo include plotting/display
     st.set_page_config(layout="wide", page_title="Live Graph Exploration")
     stt.set_theme({'primary': '#003388'})
 
