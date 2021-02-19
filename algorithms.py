@@ -50,7 +50,7 @@ def louvain_filler(G):
     fig = px.histogram(louvain.to_pandas(), x="partition", log_y=True)
     return fig, "## Louvain [{:.2f}s],"+" modularity={:.2f}".format(modularity_score)
 
-    
+
 dispatcher = {
                 "PageRank": pagerank_filler,
                 "Degree": degree_filler,

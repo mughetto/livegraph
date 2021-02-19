@@ -1,20 +1,16 @@
 from time import time
 
-import _thread
-
 import pandas as pd
 import numpy as np
 import cugraph, cudf
 
 from blazingsql import BlazingContext
 
+import GPUtil
+
 import streamlit as st
-import streamlit_theme as stt
 from streamlit_agraph import agraph, Node, Edge, Config
 
-import matplotlib
-import matplotlib.pyplot as plt
-matplotlib.use('Agg')
 import plotly.express as px
 
 import pykeen
@@ -38,9 +34,9 @@ def ingest(dataset_of_choice: str):
     # Load in various dataframe
     ds_df = pd.DataFrame({'head': data[:, 0], 'rel': data[:, 1], 'tail': data[:, 2]})
     ds_gdf = cudf.from_pandas(ds_df)
-    bc.create_table('biograph', ds_gdf)
+    bc.create_table('bio_graph', ds_gdf)
     bc.create_table(dataset_of_choice, ds_gdf.head(1)) # DEBUG: this line is here to confirm the fact that we are caching one set of blazing context and other outputs per dataset
-    gdf = bc.sql("SELECT * FROM biograph")
+    gdf = bc.sql("SELECT * FROM bio_graph")
     Gglob = cugraph.DiGraph()
     Gglob.from_cudf_edgelist(gdf, source='head', destination='tail')
     return bc, Gglob, dataset_of_choice
@@ -48,11 +44,10 @@ def ingest(dataset_of_choice: str):
 if __name__ == "__main__":
     # TODO: ad a hidable zone explaining thate timers for algo include plotting/display
     st.set_page_config(layout="wide", page_title="Live Graph Exploration")
-    stt.set_theme({'primary': '#003388'})
 
     all_datasets = pykeen.datasets.datasets
     print("Possible datasets: ", [d for d in all_datasets.keys()])
-    whitelisted_datasets = ["codexsmall", "codexmedium", "codexlarge", "hetionet", "fb15k", "wn18rr"]
+    whitelisted_datasets = ["codexsmall", "codexmedium", "codexlarge", "hetionet", "fb15k", "wn18rr", "openbiolink"]
 
     dataset_of_choice = st.sidebar.selectbox("Select one of PyKeen datasets", sorted(whitelisted_datasets))
     #dataset_of_choice = "hetionet"
@@ -63,13 +58,33 @@ if __name__ == "__main__":
         print(bc.list_tables())
         st.sidebar.markdown("**"+dataset_of_choice+"**"+" ingested in {:.2f}s".format(end_ingestion-start_ingestion))
 
-    st.sidebar.write("Number of nodes: {}".format(len(Gglob.nodes())))
-    st.sidebar.write("Number of edges: {}".format(len(Gglob.edges())))
-    selected_algos = st.sidebar.multiselect('Multiselect', ["Degree", "Degrees", "PageRank",  "Katz Centrality", "Louvain"])
-    go_compute = st.sidebar.checkbox("Allow computation")
-    st.sidebar.radio('Display type', [ "Histogram", "Dataframe"])
-    custom_edge_sql = st.sidebar.text_area('Modify the SQL projection', value="SELECT * FROM biograph LIMIT 10" )
-    #st.sidebar.number_input('SQL LIMIT', min_value=1, max_value=100, value=10, step=1)
+    gdf = bc.sql("SELECT * FROM bio_graph ")
+    unique_rels = gdf.rel.unique().to_arrow().tolist()
+    print(unique_rels)
+    del gdf
+
+    st.sidebar.write("**Number of nodes:** {}".format(len(Gglob.nodes())))
+    st.sidebar.write("**Number of edges:** {}".format(len(Gglob.edges())))
+    selected_algos = st.sidebar.multiselect('Pick your cuGraph algorithm', [algo for algo in dispatcher])
+    limit_sql = ""
+    where_sql = ""
+    with st.sidebar.beta_expander("Fine tune subgraph"):
+        # TODO: push this into its own helper
+        limit_sql = " LIMIT "+str(st.number_input('Max number of edges (SQL LIMIT)', min_value=1, max_value=None, value=10, step=1))
+        selected_rels = st.multiselect('Predicates to exclude for the subgraph', sorted(unique_rels))
+        if selected_rels:
+            rel_list_to_str = [e for e in selected_rels].__repr__()[1:-1]
+            where_sql = "WHERE rel NOT IN ({})".format(rel_list_to_str)
+        print(where_sql)
+    go_compute = st.sidebar.checkbox("Unlock live computation")
+    
+    with st.sidebar.beta_expander("Modify the edge selection manually"):
+        custom_edge_sql = st.text_area('Current subgraph SQL', value="SELECT * FROM bio_graph {} {}".format(where_sql,limit_sql) )
+
+    st.sidebar.radio('Display type (not doing anything atm)', [ "Histogram", "Dataframe"])
+
+
+    #
     #st.sidebar.text_area('Modify the SQL projection (?you can use features like louvain or PR here?)', value="SELECT * FROM biograph LIMIT 10")
     #st.sidebar.file_uploader('File uploader')
     #st.sidebar.color_picker('Pick a color')
@@ -79,15 +94,21 @@ if __name__ == "__main__":
 
     ## Section where we apply user-defined SQL
     gdf = bc.sql(custom_edge_sql)
-    #print(gdf[1:], type(gdf), gdf.columns)
-    #st.dataframe(gdf.to_pandas())
     G = cugraph.DiGraph()
     G.from_cudf_edgelist(gdf, source='head', destination='tail')
-    #st.dataframe(cugraph.weakly_connected_components(G).to_pandas())#.groupby("labels").count())
+    st.sidebar.write("**Subgraph stats:**")
+    st.sidebar.write("**Number of nodes:** {}".format(len(G.nodes())))
+    st.sidebar.write("**Number of edges:** {}".format(len(G.edges())))
+
+    GPUs = GPUtil.getGPUs()
+    st.sidebar.markdown("**GPU VRAM Utilization (max={}MB)**".format(GPUs[0].memoryTotal))
+    gpu_vmem_load = st.sidebar.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
+    st.sidebar.markdown("**GPU Utilization (max=100%)**")
+    gpu_load = st.sidebar.progress(GPUs[0].load)
 
     #with st.beta_expander("PageRank config"):
     #    alpha_pr = st.slider("alpha", min_value=0.1, max_value=0.95, value=0.85, step=0.05)
-    n_algos_to_evaluate = len(selected_algos)*2
+    n_algos_to_evaluate = len(selected_algos)*2 # 2 = global graph + subgraph scenarios
     algos_evaluated = 0
     progress_bar = st.progress(algos_evaluated/n_algos_to_evaluate)
     first_pass = True
@@ -100,14 +121,23 @@ if __name__ == "__main__":
             dispatcher[algo](Gglob)
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
+            gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
+            gpu_load.progress(GPUs[0].load)   
         with cols[1]:
             if first_pass:
                 st.write("# Info on the selected subgraph")
             dispatcher[algo](G)
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
+            gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
+            gpu_load.progress(GPUs[0].load)   
         first_pass = False
-    st.stop()
+
+    
+    gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
+    gpu_load.progress(GPUs[0].load)   
+
+    st.stop() # We don't display the subgraph yet
     # Link graph size to pagerank: size=pr.to_pandas().loc[el[1]].iloc[0]*3000
     # TODO: get icons locally, adapt them to each type wehn possible to infer from node name
     # svg="https://www.exploregenetherapy.com/images/icon/dna-helix.svg"
