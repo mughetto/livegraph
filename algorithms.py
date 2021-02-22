@@ -8,11 +8,14 @@ import plotly.express as px
 
 def algo_decorator(func):
     def wrapper(*args, **kwargs):
-        start = time()
-        fig, desc_string = func(*args, **kwargs)
-        end = time()
-        st.write(desc_string.format(end-start))
-        st.plotly_chart(fig)
+        try:
+            start = time()
+            fig, desc_string = func(*args, **kwargs)
+            end = time()
+            st.write(desc_string.format(end-start))
+            st.plotly_chart(fig)
+        except MemoryError:
+            st.error("{} failed, not enough memory on this GPU".format(func.__name__[:-7]))
     return wrapper
 
 @algo_decorator
@@ -27,7 +30,7 @@ def degree_filler(G):
     fig = px.histogram(degree.to_pandas(), x="degree", log_y=True)
     return fig, "## Degree [{:.2f}]s"
 
-# Need to improve the decorator to handle multiple fig (return a dict: name: [fig, fig2, fig3, ...)
+# TODO: Need to improve the algo_decorator to handle multiple fig (return a dict: name: [fig, fig2, fig3, ...)
 def degrees_filler(G):
     start_deg = time()
     degrees = G.degrees()
@@ -44,11 +47,25 @@ def katz_filler(G):
     fig = px.histogram(katz.to_pandas(), x="katz_centrality", log_y=True)
     return fig, "## Katz centrality [{:.2f}s]"
 
+## TODO: Below are clustering/community/components analyses that could benefit a better presentation
+
 @algo_decorator
 def louvain_filler(G):
     louvain, modularity_score = cugraph.louvain(G.to_undirected())
     fig = px.histogram(louvain.to_pandas(), x="partition", log_y=True)
     return fig, "## Louvain [{:.2f}s],"+" modularity={:.2f}".format(modularity_score)
+
+@algo_decorator
+def wcc_filler(G):
+    wcc = cugraph.weakly_connected_components(G)
+    fig = px.histogram(wcc.to_pandas(), x="labels", log_y=True)
+    return fig, "## Weakly Connected Components [{:.2f}s]"
+
+@algo_decorator
+def scc_filler(G):
+    scc = cugraph.strongly_connected_components(G)
+    fig = px.histogram(scc.to_pandas(), x="labels", log_y=True)
+    return fig, "## Strongly Connected Components [{:.2f}s]"
 
 
 dispatcher = {
@@ -56,5 +73,7 @@ dispatcher = {
                 "Degree": degree_filler,
                 "Degrees": degrees_filler,
                 "Katz Centrality": katz_filler,
-                "Louvain": louvain_filler
+                "Louvain": louvain_filler,
+                "WCC":  wcc_filler,
+                "SCC":  scc_filler
                 }
