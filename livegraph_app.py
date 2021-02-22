@@ -19,6 +19,10 @@ from pykeen.datasets import *
 from algorithms import *
 
 
+# TODO: add ACE code editor to edit a dedicated analysis function
+# TODO: add community counts
+# TODO: add WCC counts
+
 # TODO: we cache the complete blazing context! Need to evolve toward a singleton class for future perf? how does this caching work with GPU  mem ? any risk of useless blowup?
 # Skipping the hash of dict avoids a downstream issues with _thread.lock hashing
 # COOLSTUFF: streamlit cache is shared across users
@@ -78,10 +82,10 @@ if __name__ == "__main__":
         print(where_sql)
     go_compute = st.sidebar.checkbox("Unlock live computation")
     
-    with st.sidebar.beta_expander("Modify the edge selection manually"):
+    with st.sidebar.beta_expander("Modify the edge selection manually (SQL)"):
         custom_edge_sql = st.text_area('Current subgraph SQL', value="SELECT * FROM bio_graph {} {}".format(where_sql,limit_sql) )
 
-    st.sidebar.radio('Display type (not doing anything atm)', [ "Histogram", "Dataframe"])
+    #st.sidebar.radio('Display type (not doing anything atm)', [ "Histogram", "Dataframe"])
 
 
     #
