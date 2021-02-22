@@ -1,37 +1,55 @@
+import functools
+
 from time import time
 
-import cugraph
+import cugraph, cudf
 
 import streamlit as st
 
+import plotly
 import plotly.express as px
 
 def algo_decorator(func):
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             start = time()
-            fig, desc_string = func(*args, **kwargs)
+            widget, desc_string = func(*args, **kwargs)
             end = time()
             st.write(desc_string.format(end-start))
-            st.plotly_chart(fig)
+            print(type(widget))
+            if isinstance(widget, cudf.core.dataframe.DataFrame):
+                st.dataframe(widget.to_pandas())
+            if isinstance(widget, plotly.graph_objs._figure.Figure):
+                st.plotly_chart(widget)
         except MemoryError:
             st.error("{} failed, not enough memory on this GPU".format(func.__name__[:-7]))
     return wrapper
 
-@algo_decorator
-def pagerank_filler(G):
-    pr = cugraph.pagerank(G, alpha=0.85, max_iter = 500, tol = 1.0e-05).set_index("vertex")
-    fig = px.histogram(pr.to_pandas(), x="pagerank", log_y=True)
-    return fig, "## Pagerank [{:.2f}s]"
+def getWidget(dataframe, key, widget_type="Histogram"):
+    if "Histogram"==widget_type:
+        return px.histogram(dataframe.to_pandas(), x=key, log_y=True)
+    if "Dataframe"==widget_type:
+        return dataframe
+    if "Dataframe Summary"==widget_type:
+        if key in ["labels", "partition"]:
+            return dataframe.groupby(key).count()
+        else:
+            return dataframe.describe()
+
 
 @algo_decorator
-def degree_filler(G):
+def pagerank_filler(G, representation_type="Histogram"):
+    pr = cugraph.pagerank(G, alpha=0.85, max_iter = 500, tol = 1.0e-05).set_index("vertex")
+    return getWidget(pr, "pagerank", widget_type=representation_type), "## Pagerank [{:.2f}s]"
+
+@algo_decorator
+def degree_filler(G, representation_type="Histogram"):
     degree = G.degree()
-    fig = px.histogram(degree.to_pandas(), x="degree", log_y=True)
-    return fig, "## Degree [{:.2f}]s"
+    return getWidget(degree, "degree", widget_type=representation_type), "## Degree [{:.2f}]s"
 
 # TODO: Need to improve the algo_decorator to handle multiple fig (return a dict: name: [fig, fig2, fig3, ...)
-def degrees_filler(G):
+def degrees_filler(G, representation_type="Histogram"):
     start_deg = time()
     degrees = G.degrees()
     end_deg = time()
@@ -42,30 +60,26 @@ def degrees_filler(G):
     st.plotly_chart(figout)
 
 @algo_decorator
-def katz_filler(G):
+def katz_filler(G, representation_type="Histogram"):
     katz = cugraph.katz_centrality(G)
-    fig = px.histogram(katz.to_pandas(), x="katz_centrality", log_y=True)
-    return fig, "## Katz centrality [{:.2f}s]"
+    return getWidget(katz, "katz_centrality", widget_type=representation_type), "## Katz centrality [{:.2f}s]"
 
 ## TODO: Below are clustering/community/components analyses that could benefit a better presentation
 
 @algo_decorator
-def louvain_filler(G):
+def louvain_filler(G, representation_type="Histogram"):
     louvain, modularity_score = cugraph.louvain(G.to_undirected())
-    fig = px.histogram(louvain.to_pandas(), x="partition", log_y=True)
-    return fig, "## Louvain [{:.2f}s],"+" modularity={:.2f}".format(modularity_score)
+    return getWidget(louvain, "partition", widget_type=representation_type), "## Louvain [{:.2f}s],"+" modularity={:.2f}".format(modularity_score)
 
 @algo_decorator
-def wcc_filler(G):
+def wcc_filler(G, representation_type="Histogram"):
     wcc = cugraph.weakly_connected_components(G)
-    fig = px.histogram(wcc.to_pandas(), x="labels", log_y=True)
-    return fig, "## Weakly Connected Components [{:.2f}s]"
+    return getWidget(wcc, "labels", widget_type=representation_type),  "## Weakly Connected Components [{:.2f}s]"
 
 @algo_decorator
-def scc_filler(G):
+def scc_filler(G, representation_type="Histogram"):
     scc = cugraph.strongly_connected_components(G)
-    fig = px.histogram(scc.to_pandas(), x="labels", log_y=True)
-    return fig, "## Strongly Connected Components [{:.2f}s]"
+    return getWidget(scc, "labels", widget_type=representation_type),  "## Strongly Connected Components [{:.2f}s]"
 
 
 dispatcher = {

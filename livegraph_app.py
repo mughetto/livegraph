@@ -85,7 +85,7 @@ if __name__ == "__main__":
     with st.sidebar.beta_expander("Modify the edge selection manually (SQL)"):
         custom_edge_sql = st.text_area('Current subgraph SQL', value="SELECT * FROM bio_graph {} {}".format(where_sql,limit_sql) )
 
-    #st.sidebar.radio('Display type (not doing anything atm)', [ "Histogram", "Dataframe"])
+    display_type = st.sidebar.radio('Display type', [ "Histogram", "Dataframe", "Dataframe Summary"])
 
 
     #
@@ -122,7 +122,7 @@ if __name__ == "__main__":
         with cols[0]:
             if first_pass:
                 st.write("# Complete {}".format(dataset_of_choice))
-            dispatcher[algo](Gglob)
+            dispatcher[algo](Gglob, display_type)
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
             gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
@@ -130,7 +130,7 @@ if __name__ == "__main__":
         with cols[1]:
             if first_pass:
                 st.write("# Info on the selected subgraph")
-            dispatcher[algo](G)
+            dispatcher[algo](G, display_type)
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
             gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
