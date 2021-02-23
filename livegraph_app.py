@@ -34,7 +34,8 @@ def ingest(dataset_of_choice: str):
     ds = klass()
     data_tr = ds.training.triples
     data_va = ds.validation.triples
-    data = np.vstack((data_tr, data_va))
+    data_te = ds.testing.triples
+    data = np.vstack((data_tr, data_va, data_te))
     # Load in various dataframe
     ds_df = pd.DataFrame({'head': data[:, 0], 'rel': data[:, 1], 'tail': data[:, 2]})
     ds_gdf = cudf.from_pandas(ds_df)
@@ -51,9 +52,11 @@ if __name__ == "__main__":
 
     all_datasets = pykeen.datasets.datasets
     print("Possible datasets: ", [d for d in all_datasets.keys()])
-    whitelisted_datasets = ["codexsmall", "codexmedium", "codexlarge", "hetionet", "fb15k", "wn18rr", "openbiolink"]
+    whitelisted_datasets = ["openbiolink", "hetionet", "codexsmall", "codexmedium", "codexlarge",  "fb15k", "wn18rr", "nations"]
 
-    dataset_of_choice = st.sidebar.selectbox("Select one of PyKeen datasets", sorted(whitelisted_datasets))
+    dataset_of_choice = st.sidebar.selectbox("Select one of PyKeen datasets", whitelisted_datasets)
+    #selected_subsets = [ st.sidebar.checkbox(d) for d in ["testing", "training", "validating"] ]
+    
     #dataset_of_choice = "hetionet"
     with st.spinner("Loading {} to GPU...".format(dataset_of_choice)):
         start_ingestion = time()
@@ -67,8 +70,9 @@ if __name__ == "__main__":
     print(unique_rels)
     del gdf
 
-    st.sidebar.write("**Number of nodes:** {}".format(len(Gglob.nodes())))
-    st.sidebar.write("**Number of edges:** {}".format(len(Gglob.edges())))
+    # TODO: give an option to run all ? Maybe not, better have users to think about it
+    #all_algos = st.sidebar.checkbox("Select all algos")
+
     selected_algos = st.sidebar.multiselect('Pick your cuGraph algorithm', [algo for algo in dispatcher])
     limit_sql = ""
     where_sql = ""
@@ -80,15 +84,18 @@ if __name__ == "__main__":
             rel_list_to_str = [e for e in selected_rels].__repr__()[1:-1]
             where_sql = "WHERE rel NOT IN ({})".format(rel_list_to_str)
         print(where_sql)
-    go_compute = st.sidebar.checkbox("Unlock live computation")
+    go_compute = st.sidebar.checkbox("Live computation")
+    config_panels = st.sidebar.checkbox("Show algorithm advanced configurations")
     
     with st.sidebar.beta_expander("Modify the edge selection manually (SQL)"):
         custom_edge_sql = st.text_area('Current subgraph SQL', value="SELECT * FROM bio_graph {} {}".format(where_sql,limit_sql) )
 
+    ## TODO: modify selection with Python/Streamlit-ace
+    ## TODO: extract subgraph with cugraph.community.subgraph_extraction.subgraph(G, vertices)
+
     display_type = st.sidebar.radio('Display type', [ "Histogram", "Dataframe", "Dataframe Summary"])
 
-
-    #
+    # TODO: Option to weight edges (Ricci, edge betweeness)
     #st.sidebar.text_area('Modify the SQL projection (?you can use features like louvain or PR here?)', value="SELECT * FROM biograph LIMIT 10")
     #st.sidebar.file_uploader('File uploader')
     #st.sidebar.color_picker('Pick a color')
@@ -100,10 +107,6 @@ if __name__ == "__main__":
     gdf = bc.sql(custom_edge_sql)
     G = cugraph.DiGraph()
     G.from_cudf_edgelist(gdf, source='head', destination='tail')
-    st.sidebar.write("**Subgraph stats:**")
-    st.sidebar.write("**Number of nodes:** {}".format(len(G.nodes())))
-    st.sidebar.write("**Number of edges:** {}".format(len(G.edges())))
-
     GPUs = GPUtil.getGPUs()
     st.sidebar.markdown("**GPU VRAM Utilization (max={}MB)**".format(GPUs[0].memoryTotal))
     gpu_vmem_load = st.sidebar.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
@@ -117,19 +120,41 @@ if __name__ == "__main__":
     progress_bar = st.progress(algos_evaluated/n_algos_to_evaluate)
     first_pass = True
 
+
+    extra_col, header_left, header_right = st.beta_columns(3)
+    with header_left:
+        with st.beta_expander("{} stats:".format(dataset_of_choice)):
+            st.write("**Number of nodes:** {}".format(len(Gglob.nodes())))
+            st.write("**Number of edges:** {}".format(len(Gglob.edges())))
+            st.write("**Number of triangles:** {}".format(cugraph.triangles(Gglob.to_undirected())))
+    with header_right:
+        with st.beta_expander("Subgraph stats:".format(dataset_of_choice)):
+            st.write("**Number of nodes:** {}".format(len(G.nodes())))
+            st.write("**Number of edges:** {}".format(len(G.edges())))
+            st.write("**Number of triangles:** {}".format(cugraph.triangles(G.to_undirected())))
+
     for algo in selected_algos:
-        cols = st.beta_columns(2)
-        with cols[0]:
+        cols = st.beta_columns(3)
+        if config_panels:
+            with cols[0]:
+                st.write("Config panel for {}".format(algo))
+                for config in global_configurations[algo].items():
+                    parameter_name = config[0]
+                    current_value = global_configurations[algo][parameter_name]
+                    global_configurations[algo][parameter_name] = st.number_input(parameter_name, min_value=None, max_value=None, value=global_configurations[algo][parameter_name], key=algo)
+                with st.beta_expander("More on {}".format(algo)):
+                    st.info(dispatcher[algo].__doc__)
+        with cols[-2]:
             if first_pass:
-                st.write("# Complete {}".format(dataset_of_choice))
-            dispatcher[algo](Gglob, display_type)
+                st.write("# Results on {}".format(dataset_of_choice))
+            dispatcher[algo](Gglob, display_type, global_configurations[algo])
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
             gpu_vmem_load.progress(GPUs[0].memoryUsed/GPUs[0].memoryTotal)
             gpu_load.progress(GPUs[0].load)   
-        with cols[1]:
+        with cols[-1]:
             if first_pass:
-                st.write("# Info on the selected subgraph")
+                st.write("# Results on subgraph of {}".format(dataset_of_choice))
             dispatcher[algo](G, display_type)
             algos_evaluated +=1
             progress_bar.progress(algos_evaluated/n_algos_to_evaluate)
